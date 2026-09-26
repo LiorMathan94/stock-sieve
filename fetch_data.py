@@ -8,7 +8,7 @@ of disappearing. If most tickers fail, nothing is written and the script exits
 non-zero, so a blocked run can never wipe out good data.
 
 Usage:
-    python fetch_data.py            # full S&P 500 universe
+    python fetch_data.py            # full US + EU universe
     python fetch_data.py --limit 20 # quick sanity check on a subset
 """
 import argparse
@@ -42,23 +42,75 @@ def load_previous() -> dict:
         return {}
 
 
+def _symbols_from_table(table: pd.DataFrame) -> list[str]:
+    """Pull the `Symbol` column out of a US index constituents table (S&P
+    500/400 share this shape)."""
+    return [str(t).replace(".", "-") for t in table["Symbol"].tolist()]
+
+
+def _fetch_symbol_table(url: str, min_rows: int) -> list[str]:
+    resp = requests.get(url, headers=WIKI_HEADERS, timeout=15)
+    resp.raise_for_status()
+    tickers = _symbols_from_table(pd.read_html(StringIO(resp.text))[0])
+    if len(tickers) < min_rows:
+        raise ValueError(f"suspiciously short list from {url}: {len(tickers)} tickers")
+    return tickers
+
+
+def _fetch_sp500() -> list[str]:
+    return _fetch_symbol_table(config.WIKIPEDIA_SP500_URL, min_rows=400)
+
+
+def _fetch_sp400() -> list[str]:
+    return _fetch_symbol_table(config.WIKIPEDIA_SP400_URL, min_rows=300)
+
+
+def _stoxx_symbols_from_table(table: pd.DataFrame) -> list[str]:
+    """STOXX Europe 600's table has bare local tickers with no Yahoo suffix;
+    map its Country column to one via config.EU_EXCHANGE_SUFFIX. Countries
+    not in that map (a handful of rows) are skipped rather than guessed."""
+    tickers = []
+    for ticker, country in zip(table["Ticker"], table["Country"]):
+        suffix = config.EU_EXCHANGE_SUFFIX.get(str(country))
+        if suffix and pd.notna(ticker):
+            tickers.append(str(ticker).replace(".", "-") + suffix)
+    return tickers
+
+
+def _fetch_stoxx600() -> list[str]:
+    resp = requests.get(config.WIKIPEDIA_STOXX600_URL, headers=WIKI_HEADERS, timeout=15)
+    resp.raise_for_status()
+    tables = pd.read_html(StringIO(resp.text))
+    table = next(t for t in tables if "Ticker" in t.columns and "Country" in t.columns)
+    tickers = _stoxx_symbols_from_table(table)
+    if len(tickers) < 300:
+        raise ValueError(f"suspiciously short STOXX 600 list: {len(tickers)} tickers")
+    return tickers
+
+
 def get_universe(previous: dict) -> list[str]:
-    try:
-        resp = requests.get(config.WIKIPEDIA_SP500_URL, headers=WIKI_HEADERS, timeout=15)
-        resp.raise_for_status()
-        table = pd.read_html(StringIO(resp.text))[0]
-        tickers = [str(t).replace(".", "-") for t in table["Symbol"].tolist()]
-        if len(tickers) < 400:
-            raise ValueError(f"suspiciously short S&P 500 list: {len(tickers)} tickers")
+    """Combines three independent, individually-fault-tolerant sources: S&P
+    500 + S&P 400 (US) and STOXX Europe 600 (EU) — all three are themselves
+    market-cap-based index memberships, so this is a bounded "top-N by market
+    cap across US+EU" universe rather than an unbounded scrape."""
+    sources = [("S&P 500", _fetch_sp500), ("S&P 400", _fetch_sp400), ("STOXX 600", _fetch_stoxx600)]
+    tickers: list[str] = []
+    for name, fetch in sources:
+        try:
+            tickers += fetch()
+        except Exception as exc:
+            print(f"[universe] {name} failed ({exc}); skipping that source", file=sys.stderr)
+
+    if tickers:
         return tickers
-    except Exception as exc:
-        prev_tickers = [s["ticker"] for s in previous.get("stocks", [])]
-        prev_tickers += previous.get("failed_tickers", [])
-        if prev_tickers:
-            print(f"[universe] Wikipedia failed ({exc}); reusing previous universe", file=sys.stderr)
-            return prev_tickers
-        print(f"[universe] Wikipedia failed ({exc}); using fallback list", file=sys.stderr)
-        return list(config.FALLBACK_TICKERS)
+
+    prev_tickers = [s["ticker"] for s in previous.get("stocks", [])]
+    prev_tickers += previous.get("failed_tickers", [])
+    if prev_tickers:
+        print("[universe] all sources failed; reusing previous universe", file=sys.stderr)
+        return prev_tickers
+    print("[universe] all sources failed; using fallback list", file=sys.stderr)
+    return list(config.FALLBACK_TICKERS)
 
 
 def _round(value, ndigits=4):
@@ -70,6 +122,17 @@ def parse_yfinance_info(info: dict) -> dict | None:
     name = info.get("longName") or info.get("shortName")
     if not price or not name:
         return None
+
+    # yfinance reports London-listed prices in pence ("GBp"), but dividendRate,
+    # bookValue and marketCap for the same stock are already in pounds
+    # (confirmed against GSK.L: priceToBook and dividendYield only reconcile
+    # if price is treated as pence while those others are pounds). Convert
+    # price to pounds so it's consistent with everything else and isn't
+    # displayed 100x too high.
+    currency = info.get("currency")
+    if currency == "GBp":
+        currency = "GBP"
+        price = price / 100
 
     # Computed from the dollar dividend so we don't depend on yfinance's
     # dividendYield units (which changed from fraction to percent across versions).
@@ -103,6 +166,7 @@ def parse_yfinance_info(info: dict) -> dict | None:
         "debt_to_equity": debt_to_equity / 100 if debt_to_equity is not None else None,
         "book_value_per_share": info.get("bookValue"),
         "free_cash_flow": info.get("freeCashflow"),
+        "currency": currency,
         "source": "yfinance",
     }
 
@@ -179,6 +243,7 @@ def fetch_from_fmp(ticker: str, calls_used: list[int]) -> dict | None:
         "debt_to_equity": _pick((ratios, "debtToEquityRatioTTM", "debtEquityRatioTTM")),
         "book_value_per_share": _pick((metrics, "bookValuePerShareTTM"), (ratios, "bookValuePerShareTTM")),
         "free_cash_flow": free_cash_flow,
+        "currency": "USD",  # FMP's free tier is US-only in practice
         "source": "fmp",
     }
 
@@ -268,7 +333,7 @@ def main():
     parser.add_argument("--limit", type=int, default=None, help="Only fetch the first N tickers (testing)")
     parser.add_argument("--output", default=None, help="Output path (default: data file, or a sample file with --limit)")
     args = parser.parse_args()
-    # A --limit test run must not replace the real 500-stock file.
+    # A --limit test run must not replace the real data file.
     output_path = args.output or (config.SAMPLE_DATA_FILE if args.limit else config.DATA_FILE)
 
     previous = load_previous()

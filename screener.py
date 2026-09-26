@@ -5,6 +5,8 @@ from typing import Mapping
 
 import pandas as pd
 
+import config
+
 # A slider left at its maximum means "no limit" rather than a real cap, so
 # stocks above it (or with missing values) aren't silently hidden.
 PE_SLIDER_MAX = 100
@@ -129,6 +131,27 @@ def add_value_rank(df: pd.DataFrame) -> pd.DataFrame:
         "debt": _meaningful(df, "debt_to_equity").rank(pct=True, ascending=False),
     })
     return df.assign(value_rank=parts.mean(axis=1))
+
+
+def top_recommendations(df: pd.DataFrame) -> pd.DataFrame:
+    """The best value/dividend picks: stocks passing all 3 tunable criteria
+    (low P/E, high dividend yield, low debt-to-equity), best `value_score`
+    first (ties broken by `value_rank`) -- the same ordering convention as
+    the main table's default sort. If fewer than RECOMMENDED_MIN qualify,
+    backfilled with the next-best non-qualifying stocks so the view is never
+    near-empty; capped at RECOMMENDED_MAX either way. Assumes `add_value_rank`
+    was already applied (as `load_data` does upstream)."""
+    ranked = df.sort_values(["value_score", "value_rank"], ascending=False, kind="mergesort")
+    qualifies = (
+        ranked["flag_low_pe"].astype(bool)
+        & ranked["flag_high_dividend"].astype(bool)
+        & ranked["flag_low_debt"].astype(bool)
+    )
+    picks = ranked[qualifies]
+    if len(picks) < config.RECOMMENDED_MIN:
+        backfill = ranked[~qualifies]
+        picks = pd.concat([picks, backfill.head(config.RECOMMENDED_MIN - len(picks))])
+    return picks.head(config.RECOMMENDED_MAX)
 
 
 def sort_stocks(df: pd.DataFrame, sort: str, direction: str) -> pd.DataFrame:

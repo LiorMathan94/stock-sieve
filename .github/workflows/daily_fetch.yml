@@ -12,7 +12,7 @@ concurrency:
 jobs:
   fetch:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90  # ~2.7x more tickers now that the universe covers US + EU
     permissions:
       contents: write
     steps:

@@ -8,9 +8,34 @@ FMP_API_KEY = os.environ.get("FMP_API_KEY", "")
 FMP_BASE_URL = "https://financialmodelingprep.com/stable"
 
 WIKIPEDIA_SP500_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+WIKIPEDIA_SP400_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_400_companies"
+WIKIPEDIA_STOXX600_URL = "https://en.wikipedia.org/wiki/STOXX_Europe_600"
 
-# Last-resort universe, used only if both Wikipedia and the previous data file
-# are unavailable (e.g. the very first run with no network to Wikipedia).
+# STOXX Europe 600's Wikipedia table gives bare local-exchange tickers with no
+# Yahoo suffix; this maps its "Country" column to the right one. Countries not
+# listed here (a handful of rows: Luxembourg, Bermuda, Greece, Israel) are
+# skipped rather than guessed.
+EU_EXCHANGE_SUFFIX = {
+    "United Kingdom": ".L",
+    "Germany": ".DE",
+    "France": ".PA",
+    "Switzerland": ".SW",
+    "Netherlands": ".AS",
+    "Italy": ".MI",
+    "Spain": ".MC",
+    "Sweden": ".ST",
+    "Belgium": ".BR",
+    "Finland": ".HE",
+    "Norway": ".OL",
+    "Denmark": ".CO",
+    "Austria": ".VI",
+    "Portugal": ".LS",
+    "Ireland": ".IR",
+    "Poland": ".WA",
+}
+
+# Last-resort universe, used only if every Wikipedia source and the previous
+# data file are unavailable (e.g. the very first run with no network access).
 FALLBACK_TICKERS = [
     "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "BRK-B", "JPM", "JNJ", "XOM",
     "PG", "KO", "PEP", "T", "VZ", "WMT", "HD", "CVX", "ABBV", "PFE",
@@ -36,6 +61,10 @@ FMP_CALLS_PER_TICKER = 3  # profile + ratios-ttm + key-metrics-ttm
 PE_MAX = 15
 DIVIDEND_YIELD_MIN = 3.0  # percent
 DEBT_TO_EQUITY_MAX = 1.0  # ratio, not percent
+
+# Size bounds for the "recommended" view: stocks passing all 3 criteria above.
+RECOMMENDED_MIN = 10
+RECOMMENDED_MAX = 20
 
 PRICE_HISTORY_PERIOD = "1y"
 PRICE_HISTORY_INTERVAL = "1wk"

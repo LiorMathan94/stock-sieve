@@ -47,6 +47,12 @@ SCORE_COLORS = {  # (background, text) keyed by min score threshold, checked des
     0: ("#f1f5f9", "#64748b"),
 }
 
+# Display name for each fetch_data.py provider, plus a live quote-page link
+# where one reliably exists (FMP's own /quote/ pages 403 for us -- confirmed
+# by hand -- so fmp gets no outbound link, just its name).
+SOURCE_NAMES = {"yfinance": "Yahoo Finance", "fmp": "Financial Modeling Prep"}
+YFINANCE_QUOTE_URL = "https://finance.yahoo.com/quote/{ticker}"
+
 # (field, label key, tooltip key or None, column width %, wraps instead of truncating)
 TABLE_COLUMNS = [
     ("ticker", "col_ticker", "tip_ticker", 7, False),
@@ -74,6 +80,8 @@ def load_data(mtime: float) -> tuple[dict, pd.DataFrame]:
     with open(config.DATA_FILE, encoding="utf-8") as f:
         data = json.load(f)
     df = pd.DataFrame(data["stocks"]).drop(columns=["price_history", "description"], errors="ignore")
+    # Older cached records (pre-EU expansion) have no currency field at all.
+    df["currency"] = df["currency"].fillna("USD") if "currency" in df.columns else "USD"
     return data, screener.add_value_rank(df)
 
 
@@ -96,18 +104,29 @@ def fmt_num(value, decimals=1, suffix=""):
     return None if is_missing(value) else f"{value:,.{decimals}f}{suffix}"
 
 
-def fmt_price(value):
-    return None if is_missing(value) else f"${value:,.2f}"
+CURRENCY_SYMBOLS = {
+    "USD": "$", "EUR": "€", "GBP": "£", "CHF": "CHF ", "SEK": "kr ",
+    "NOK": "kr ", "DKK": "kr ", "PLN": "zł ",
+}
 
 
-def fmt_money(value):
+def currency_symbol(currency) -> str:
+    return CURRENCY_SYMBOLS.get(currency or "USD", f"{currency} ")
+
+
+def fmt_price(value, currency=None):
+    return None if is_missing(value) else f"{currency_symbol(currency)}{value:,.2f}"
+
+
+def fmt_money(value, currency=None):
     if is_missing(value):
         return None
     sign = "-" if value < 0 else ""
+    symbol = currency_symbol(currency)
     for divisor, label in ((1e12, "T"), (1e9, "B"), (1e6, "M")):
         if abs(value) >= divisor:
-            return f"{sign}${abs(value) / divisor:,.1f}{label}"
-    return f"{sign}${abs(value):,.0f}"
+            return f"{sign}{symbol}{abs(value) / divisor:,.1f}{label}"
+    return f"{sign}{symbol}{abs(value):,.0f}"
 
 
 def cell_value(formatted, lang) -> str:
@@ -132,6 +151,10 @@ def get_lang() -> str:
     return "en" if st.query_params.get("lang") == "en" else "he"
 
 
+def get_view() -> str:
+    return "all" if st.query_params.get("view") == "all" else "recommended"
+
+
 def href(**overrides) -> str:
     """Link to the current URL with some params replaced (None removes one)."""
     query = st.query_params.to_dict()
@@ -146,6 +169,12 @@ def href(**overrides) -> str:
 def link(label_html: str, url: str, css_class: str, title: str = "") -> str:
     title_attr = f' title="{esc(title)}"' if title else ""
     return f'<a class="{css_class}" href="{esc(url)}" target="_self"{title_attr}>{label_html}</a>'
+
+
+def external_link(label_html: str, url: str) -> str:
+    """A link to somewhere off-site (the data provider), as opposed to `link`
+    which navigates within the app."""
+    return f'<a class="external-link" href="{esc(url)}" target="_blank" rel="noopener noreferrer">{label_html} ↗</a>'
 
 
 # ---------- page pieces ----------
@@ -181,6 +210,8 @@ def inject_css(lang: str):
 
         h1 {{ font-weight: 800; letter-spacing: -0.01em; }}
         .meta-line {{ color: #94a3b8; font-size: 0.82rem; margin-bottom: 2px; }}
+        .external-link {{ color: {PRIMARY} !important; text-decoration: none !important; }}
+        .external-link:hover {{ text-decoration: underline !important; }}
         .disclaimer {{
             color: #94a3b8; font-size: 0.82rem; font-style: italic; margin-top: 0;
             border-inline-start: 3px solid #e2e8f0; padding-inline-start: 10px;
@@ -205,6 +236,15 @@ def inject_css(lang: str):
         .pill-button.subtle {{ border-color: #cbd5e1; color: #475569 !important; }}
         .pill-button.subtle:hover {{ background: #475569; border-color: #475569; color: white !important; }}
 
+        .tabs-row {{ display: flex; gap: 6px; margin: 14px 0 4px; border-bottom: 1px solid #e2e8f0; }}
+        .tab-link {{
+            display: inline-block; padding: 8px 18px; font-weight: 600; font-size: 0.92rem;
+            color: #64748b !important; text-decoration: none !important;
+            border-bottom: 2.5px solid transparent; margin-bottom: -1px;
+        }}
+        .tab-link:hover {{ color: {PRIMARY} !important; }}
+        .tab-link.active {{ color: {PRIMARY} !important; border-bottom-color: {PRIMARY}; }}
+
         .table-wrapper {{
             max-height: 70vh; overflow-y: auto; overflow-x: hidden;
             border: 1px solid #e2e8f0; border-radius: 12px;
@@ -220,18 +260,26 @@ def inject_css(lang: str):
             font-weight: 700; padding: 0; text-align: center;
             word-break: keep-all; overflow-wrap: normal;
         }}
-        a.sort-link {{
+        .sort-link {{
             display: block; padding: 10px 4px; color: #ffffff !important;
             text-decoration: none !important; cursor: pointer;
         }}
         a.sort-link:hover {{ background: #1f6b4d; }}
         a.sort-link.active {{ background: #0f3d2b; }}
         table.stock-table td {{
-            padding: 7px 4px; border-bottom: 1px solid #eef1ef; font-size: 0.82rem;
+            padding: 0; border-bottom: 1px solid #eef1ef; font-size: 0.82rem;
             color: #1e293b; text-align: center; overflow: hidden;
             text-overflow: ellipsis; white-space: nowrap;
         }}
         table.stock-table td.wrap-cell {{ white-space: normal; word-break: break-word; }}
+        /* The ticker cell has its own small pill link, not a full-cell one, so it keeps its own padding. */
+        table.stock-table td.ticker-cell {{ padding: 7px 4px; }}
+        table.stock-table td a.row-link {{
+            display: block; width: 100%; height: 100%; padding: 7px 4px;
+            box-sizing: border-box; color: inherit; text-decoration: none !important;
+            overflow: hidden; text-overflow: ellipsis;
+        }}
+        table.stock-table td.wrap-cell a.row-link {{ white-space: normal; word-break: break-word; }}
         table.stock-table tbody tr:nth-child(even) {{ background-color: #fafbfa; }}
         table.stock-table tbody tr:hover {{ background-color: #eaf4ee; }}
         .na {{ color: #cbd5e1; }}
@@ -281,6 +329,20 @@ def inject_css(lang: str):
         """,
         unsafe_allow_html=True,
     )
+
+
+def render_view_tabs(view: str, lang: str):
+    """Link-based tabs, not st.tabs: every navigation link on this page starts
+    a fresh Streamlit session (see module docstring), and st.tabs always resets
+    to its first tab on a fresh run -- so it can't survive a sort/filter click.
+    Keeping the active tab in the URL like everything else fixes that."""
+    tabs = [("recommended", "tab_recommended"), ("all", "tab_all_stocks")]
+    links = "".join(
+        link(t(label_key, lang), href(view=None if key == "recommended" else key),
+             "tab-link active" if key == view else "tab-link")
+        for key, label_key in tabs
+    )
+    st.markdown(f'<div class="tabs-row">{links}</div>', unsafe_allow_html=True)
 
 
 def render_header(data: dict, lang: str):
@@ -357,29 +419,48 @@ def header_cell(field: str, label_key: str, tip_key: str | None, f: Filters, lan
     return f"<th>{link(esc(t(label_key, lang)) + arrow, url, css, tooltip)}</th>"
 
 
-def render_table(df: pd.DataFrame, f: Filters, lang: str):
+def header_cell_static(label_key: str, tip_key: str | None, lang: str) -> str:
+    """A plain, non-clickable column header (for views with a fixed order)."""
+    tooltip = f' title="{esc(t(tip_key, lang))}"' if tip_key else ""
+    return f'<th><span class="sort-link" style="cursor:default;"{tooltip}>{esc(t(label_key, lang))}</span></th>'
+
+
+def render_table(df: pd.DataFrame, f: Filters, lang: str, sortable: bool = True):
     colgroup = "".join(f'<col style="width:{w}%">' for _, _, _, w, _ in TABLE_COLUMNS)
-    header = "".join(header_cell(field, label, tip, f, lang) for field, label, tip, _, _ in TABLE_COLUMNS)
+    if sortable:
+        header = "".join(header_cell(field, label, tip, f, lang) for field, label, tip, _, _ in TABLE_COLUMNS)
+    else:
+        header = "".join(header_cell_static(label, tip, lang) for _, label, tip, _, _ in TABLE_COLUMNS)
     rows = []
     for row in df.itertuples(index=False):
         cells = {
             "ticker": link(esc(row.ticker), href(ticker=row.ticker), "ticker-badge"),
             "name": f'<span title="{esc(row.name)}">{ltr(esc(row.name))}</span>',
             "sector": sector_pill(row.sector, lang),
-            "price": cell_value(fmt_price(row.price), lang),
+            "price": cell_value(fmt_price(row.price, row.currency), lang),
             "pe_ratio": cell_value(fmt_num(row.pe_ratio, 1), lang),
             "pb_ratio": cell_value(fmt_num(row.pb_ratio, 2), lang),
             "dividend_yield": cell_value(fmt_num(row.dividend_yield, 2, "%"), lang),
             "roe": cell_value(fmt_num(row.roe, 1, "%"), lang),
             "debt_to_equity": cell_value(fmt_num(row.debt_to_equity, 2), lang),
-            "market_cap": cell_value(fmt_money(row.market_cap), lang),
+            "market_cap": cell_value(fmt_money(row.market_cap, row.currency), lang),
             "value_score": score_badge(int(row.value_score)),
         }
-        tds = "".join(
-            f'<td class="wrap-cell">{cells[field]}</td>' if wraps else f"<td>{cells[field]}</td>"
-            for field, _, _, _, wraps in TABLE_COLUMNS
-        )
-        rows.append(f"<tr>{tds}</tr>")
+        # Every cell but the ticker (already its own link) is wrapped in a
+        # full-cell link too, so the whole row is clickable, not just the
+        # ticker badge. A real <a>, not a JS onclick: Streamlit's markdown
+        # renderer sanitizes raw HTML (DOMPurify) and strips onclick/inline
+        # event handlers even with unsafe_allow_html=True, so JS handlers
+        # silently do nothing -- only real anchor tags survive.
+        row_url = esc(href(ticker=row.ticker))
+        tds = []
+        for field, _, _, _, wraps in TABLE_COLUMNS:
+            if field == "ticker":
+                tds.append(f'<td class="ticker-cell">{cells[field]}</td>')
+                continue
+            content = f'<a class="row-link" href="{row_url}">{cells[field]}</a>'
+            tds.append(f'<td class="wrap-cell">{content}</td>' if wraps else f"<td>{content}</td>")
+        rows.append(f"<tr>{''.join(tds)}</tr>")
     st.markdown(
         f'<div class="table-wrapper"><table class="stock-table"><colgroup>{colgroup}</colgroup>'
         f'<thead><tr>{header}</tr></thead><tbody>{"".join(rows)}</tbody></table></div>',
@@ -387,12 +468,14 @@ def render_table(df: pd.DataFrame, f: Filters, lang: str):
     )
 
 
-def render_price_chart(history: list[dict], lang: str):
+def render_price_chart(history: list[dict], lang: str, currency: str | None = None):
     if not history:
         st.info(t("no_chart_data", lang))
         return
+    symbol = currency_symbol(currency)
     hist = pd.DataFrame(history)
     hist["date"] = pd.to_datetime(hist["date"])
+    hist["close_label"] = hist["close"].apply(lambda v: f"{symbol}{v:,.2f}")
     first, last = hist["close"].iloc[0], hist["close"].iloc[-1]
     change = (last / first - 1) * 100
     change_cls = "change-up" if change >= 0 else "change-down"
@@ -410,7 +493,11 @@ def render_price_chart(history: list[dict], lang: str):
             "date:T", title=None,
             axis=alt.Axis(format="%b %y", grid=False, tickCount={"interval": "month", "step": 2}),
         ),
-        y=alt.Y("close:Q", title=None, scale=alt.Scale(domain=domain, nice=False), axis=alt.Axis(format="$,.0f")),
+        y=alt.Y(
+            "close:Q", title=None, scale=alt.Scale(domain=domain, nice=False),
+            # d3-format's "$" symbol is USD-only; prepend the stock's own currency instead.
+            axis=alt.Axis(labelExpr=f"'{symbol}' + format(datum.value, ',.0f')"),
+        ),
     )
     chart = (
         base.mark_area(color=PRIMARY, opacity=0.08).encode(y2=alt.datum(domain[0]))
@@ -418,7 +505,7 @@ def render_price_chart(history: list[dict], lang: str):
         + base.mark_point(opacity=0, size=80).encode(
             tooltip=[
                 alt.Tooltip("date:T", title="", format="%d/%m/%Y"),
-                alt.Tooltip("close:Q", title="", format="$,.2f"),
+                alt.Tooltip("close_label:N", title=""),
             ]
         )
     ).properties(height=300)
@@ -436,16 +523,29 @@ def render_detail(stock: dict, data: dict, lang: str):
     if as_of and as_of < data["last_updated"][:10]:
         st.markdown(f'<div class="stale-warning">{t("data_as_of", lang, date=as_of)}</div>', unsafe_allow_html=True)
 
+    source_key = stock.get("source")
+    source_name = SOURCE_NAMES.get(source_key, source_key or t("not_available", lang))
+    source_label = (
+        external_link(esc(source_name), YFINANCE_QUOTE_URL.format(ticker=stock["ticker"]))
+        if source_key == "yfinance" else esc(source_name)
+    )
+    as_of_suffix = f' · {t("as_of_date", lang, date=as_of)}' if as_of else ""
+    st.markdown(
+        f'<p class="meta-line">{t("data_source", lang)}: {ltr(source_label)}{as_of_suffix}</p>',
+        unsafe_allow_html=True,
+    )
+
+    currency = stock.get("currency") or "USD"
     stats = [
-        ("col_price", fmt_price(stock.get("price"))),
+        ("col_price", fmt_price(stock.get("price"), currency)),
         ("col_pe", fmt_num(stock.get("pe_ratio"), 1)),
         ("col_pb", fmt_num(stock.get("pb_ratio"), 2)),
         ("col_dividend_yield", fmt_num(stock.get("dividend_yield"), 2, "%")),
         ("col_roe", fmt_num(stock.get("roe"), 1, "%")),
         ("col_debt_to_equity", fmt_num(stock.get("debt_to_equity"), 2)),
-        ("col_market_cap", fmt_money(stock.get("market_cap"))),
-        ("book_value_per_share", fmt_price(stock.get("book_value_per_share"))),
-        ("free_cash_flow", fmt_money(stock.get("free_cash_flow"))),
+        ("col_market_cap", fmt_money(stock.get("market_cap"), currency)),
+        ("book_value_per_share", fmt_price(stock.get("book_value_per_share"), currency)),
+        ("free_cash_flow", fmt_money(stock.get("free_cash_flow"), currency)),
     ]
     cards = "".join(
         f'<div class="metric-card"><div class="metric-label">{t(key, lang)}</div>'
@@ -473,7 +573,7 @@ def render_detail(stock: dict, data: dict, lang: str):
     st.markdown(f'<ul class="criteria">{items}</ul>', unsafe_allow_html=True)
 
     st.subheader(t("price_chart", lang))
-    render_price_chart(stock.get("price_history") or [], lang)
+    render_price_chart(stock.get("price_history") or [], lang, currency)
 
     if stock.get("description"):
         st.subheader(t("description", lang))
@@ -498,21 +598,32 @@ def main():
     filters = sidebar_filters(df, lang)
     render_header(data, lang)
 
-    result = screener.sort_stocks(screener.apply_filters(df, filters), filters.sort, filters.direction)
-    reset = (
-        link(t("reset_filters", lang), "?" + urlencode({"lang": "en"} if lang == "en" else {}), "pill-button subtle")
-        if filters.has_active_filters() else ""
-    )
-    st.markdown(
-        f'<div class="results-row"><span class="results-badge">'
-        f'{t("results_count", lang, n=len(result), total=len(df))}</span>{reset}'
-        f'<span class="hint">{t("sort_hint", lang)}</span></div>',
-        unsafe_allow_html=True,
-    )
-    if result.empty:
-        st.info(t("no_results", lang))
+    view = get_view()
+    render_view_tabs(view, lang)
+
+    if view == "recommended":
+        st.markdown(f'<p class="hint">{t("recommended_explainer", lang)}</p>', unsafe_allow_html=True)
+        picks = screener.top_recommendations(df)
+        if picks.empty:
+            st.info(t("no_results", lang))
+        else:
+            render_table(picks, filters, lang, sortable=False)
     else:
-        render_table(result, filters, lang)
+        result = screener.sort_stocks(screener.apply_filters(df, filters), filters.sort, filters.direction)
+        reset = (
+            link(t("reset_filters", lang), href(**{k: None for k in screener.QUERY_KEYS.values()}), "pill-button subtle")
+            if filters.has_active_filters() else ""
+        )
+        st.markdown(
+            f'<div class="results-row"><span class="results-badge">'
+            f'{t("results_count", lang, n=len(result), total=len(df))}</span>{reset}'
+            f'<span class="hint">{t("sort_hint", lang)}</span></div>',
+            unsafe_allow_html=True,
+        )
+        if result.empty:
+            st.info(t("no_results", lang))
+        else:
+            render_table(result, filters, lang)
 
 
 if __name__ == "__main__":

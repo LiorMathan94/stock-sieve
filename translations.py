@@ -14,6 +14,13 @@ STRINGS = {
         "en": "A low P/E or P/B alone doesn't mean a stock is a good buy — declining businesses can look \"cheap\" too.",
     },
 
+    "tab_recommended": {"he": "מומלצות", "en": "Recommended"},
+    "tab_all_stocks": {"he": "כל המניות", "en": "All Stocks"},
+    "recommended_explainer": {
+        "he": "המניות המובילות שעומדות בשלושת קריטריוני הערך: מכפיל רווח נמוך, תשואת דיבידנד גבוהה וחוב נמוך.",
+        "en": "The top stocks meeting all 3 value criteria: low P/E, high dividend yield, and low debt.",
+    },
+
     "filters_header": {"he": "סינון", "en": "Filters"},
     "max_pe": {"he": "מכפיל רווח מקסימלי", "en": "Max P/E"},
     "max_pb": {"he": "מכפיל הון מקסימלי", "en": "Max P/B"},
@@ -41,7 +48,7 @@ STRINGS = {
 
     # Plain-language explanations shown as header tooltips.
     "tip_ticker": {"he": "סימול המניה בבורסה — לחצו עליו לפרטים", "en": "Stock symbol — click it for details"},
-    "tip_price": {"he": "מחיר המניה האחרון, בדולרים", "en": "Latest share price, in US dollars"},
+    "tip_price": {"he": "מחיר המניה האחרון, במטבע המקומי שלה", "en": "Latest share price, in the stock's local currency"},
     "tip_pe": {
         "he": "מחיר המניה חלקי הרווח השנתי למניה. נמוך יותר = זול יותר ביחס לרווחים",
         "en": "Share price divided by yearly earnings per share. Lower = cheaper relative to profits",
@@ -79,6 +86,8 @@ STRINGS = {
         "he": "העדכון האחרון לא הצליח עבור מניה זו — הנתונים נכונים ל-{date}",
         "en": "The latest refresh failed for this stock — data is as of {date}",
     },
+    "data_source": {"he": "מקור הנתונים", "en": "Data source"},
+    "as_of_date": {"he": "נכון לתאריך {date}", "en": "as of {date}"},
 
     "criteria_header": {"he": "קריטריוני ערך — {n} מתוך 5", "en": "Value criteria — {n} of 5 met"},
     "crit_pb": {"he": "מכפיל הון מתחת ל-1 (הון עצמי גבוה משווי השוק)", "en": "P/B below 1 (book value above market cap)"},
