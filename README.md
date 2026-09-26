@@ -4,13 +4,21 @@ A simple value/dividend stock screener for the S&P 500. Hebrew-first, English to
 
 ## How it works
 
-1. `fetch_data.py` runs once a day (via GitHub Actions), pulls fundamentals for
-   every S&P 500 ticker from [yfinance](https://github.com/ranaroussi/yfinance),
-   falling back to the [Financial Modeling Prep](https://financialmodelingprep.com/)
-   free API for any ticker yfinance fails on, and writes everything to
-   `data/stocks.json`.
+1. `fetch_data.py` runs once per trading day (via GitHub Actions), pulls
+   fundamentals for every S&P 500 ticker from
+   [yfinance](https://github.com/ranaroussi/yfinance), falling back to the
+   [Financial Modeling Prep](https://financialmodelingprep.com/) free API for
+   any ticker yfinance fails on, and writes everything to `data/stocks.json`.
 2. `app.py` (Streamlit) only ever reads `data/stocks.json` — it never calls
    either API on page load, so there's no daily-limit risk from visitors.
+
+| File | What it does |
+|---|---|
+| `fetch_data.py` | Daily data pull, value flags, merge with the previous day's data |
+| `screener.py` | Filtering, sorting and ranking (pure pandas, unit-tested) |
+| `app.py` | Streamlit UI: layout, HTML table, stock page, RTL styling |
+| `translations.py` | Every UI string, in Hebrew and English |
+| `config.py` | Thresholds, paths, retry/timeout settings |
 
 ## 1. Get an FMP API key (fallback source)
 
@@ -25,66 +33,94 @@ though it's rarely used:
    repository secret named `FMP_API_KEY` on GitHub (Settings → Secrets and
    variables → Actions → New repository secret) for the scheduled workflow.
 
-If you don't set a key, `fetch_data.py` still works — it just can't recover
-tickers that yfinance failed on that day (they're listed under
-`failed_tickers` in `data/stocks.json` and simply missing from the app until
-the next successful run).
+## What happens when a fetch goes wrong
+
+- **A few tickers fail**: they keep their previous day's data (the stock page
+  shows a "data is as of …" note) and are listed under `failed_tickers`.
+- **Most tickers fail** (e.g. Yahoo blocks the runner): nothing is written,
+  the script exits with an error, and the GitHub Action fails — GitHub emails
+  you. Yesterday's data stays in place.
+- **Wikipedia is unreachable**: the previous day's ticker list is reused.
+- **Data hasn't refreshed for 4+ days**: the app shows a warning banner, so a
+  silently broken schedule doesn't go unnoticed.
 
 ## 2. Run fetch_data.py locally
 
 ```bash
 pip install -r requirements.txt
 export FMP_API_KEY=your_key_here   # optional but recommended
-python fetch_data.py               # full S&P 500, ~10-15 minutes
-python fetch_data.py --limit 20    # quick sanity check on a subset
+python fetch_data.py               # full S&P 500, ~15 minutes
+python fetch_data.py --limit 20    # quick check; writes data/stocks.sample.json
 ```
 
-This writes `data/stocks.json`. Commit that file so the deployed app has data
-to read.
+A `--limit` run writes to `data/stocks.sample.json` (gitignored) so it can't
+replace the real data file.
 
 ## 3. Schedule the daily fetch (GitHub Actions)
 
-Already set up in `.github/workflows/daily_fetch.yml` — it runs daily at
-06:00 UTC and commits the refreshed `data/stocks.json` back to the repo. Make
-sure the `FMP_API_KEY` secret is set (step 1) and that Actions has permission
-to push (Settings → Actions → General → Workflow permissions → "Read and
-write permissions").
+Already set up in `.github/workflows/daily_fetch.yml` — it runs at 06:00 UTC
+Tuesday–Saturday (after each US trading day) and commits the refreshed
+`data/stocks.json` back to the repo. Make sure the `FMP_API_KEY` secret is
+set (step 1) and that Actions has permission to push (Settings → Actions →
+General → Workflow permissions → "Read and write permissions").
 
 You can also trigger it manually from the Actions tab ("Run workflow").
 
 ## 4. Deploy app.py to Streamlit Community Cloud
 
-1. Push this repo to GitHub.
-2. Go to https://share.streamlit.io/, sign in, "New app".
-3. Point it at this repo, branch `main`, main file `app.py`.
-4. Deploy. The app reads `data/stocks.json` from the repo — no secrets
-   needed for the app itself (only the fetch workflow needs `FMP_API_KEY`).
+1. Go to https://share.streamlit.io/, sign in with GitHub, "New app".
+2. Point it at this repo, branch `main`, main file `app.py`.
+3. Deploy. The app reads `data/stocks.json` from the repo and picks up each
+   daily refresh automatically — no secrets needed for the app itself.
+
+## Using the app
+
+- **Sort** by clicking any column header (click again to reverse). Missing
+  values always sort last.
+- **Filters** live in the sidebar. A slider left at its maximum means "no
+  limit"; any active filter excludes stocks missing that metric.
+- The current filters and sort are part of the page URL, so they survive
+  opening a stock and coming back, switching language, and can be bookmarked
+  or shared.
+- Hover a column header for a plain-language explanation of the metric.
+- A stock's page shows which of the 5 value criteria it meets.
 
 ## Adding or removing tickers from the universe
 
 The universe is the live S&P 500 list scraped from Wikipedia at fetch time
-(`get_sp500_universe()` in `fetch_data.py`), so it updates automatically as
-the index changes. To track a custom list instead, edit
-`config.FALLBACK_TICKERS` and change `get_sp500_universe()` to return it
-directly instead of scraping Wikipedia.
+(`get_universe()` in `fetch_data.py`), so it updates automatically as the
+index changes. When a company has several share classes (GOOGL/GOOG) only the
+first listing is kept. To track a custom list instead, change
+`get_universe()` to return your own list.
 
 ## Adding or fixing a translation string
 
 All UI text lives in `translations.py` as a dict:
 
 ```python
-"pe_ratio": {"he": "מכפיל רווח", "en": "P/E Ratio"},
+"col_pe": {"he": "מכפיל רווח", "en": "P/E"},
 ```
 
 Add a new key there, then reference it in `app.py` with `t("your_key", lang)`.
 Company names, sectors, and descriptions come from the data API in English
 and are intentionally left untranslated.
 
+## Tests
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+They also run on GitHub on every push (`.github/workflows/tests.yml`).
+
 ## Data notes
 
 - Missing fields show as "N/A" / "לא זמין" rather than crashing the app.
-- The "Value Score" column counts how many of 5 criteria a stock meets
-  (P/B < 1, low P/E, high dividend yield, low debt/equity, positive free
-  cash flow) — the table defaults to sorting by this, not any single metric.
+  Companies that pay no dividend show 0%, not N/A.
+- The "Value Score" counts how many of 5 criteria a stock meets (P/B < 1,
+  P/E < 15, dividend yield > 3%, debt/equity < 1, positive free cash flow;
+  thresholds in `config.py`). Stocks with the same score are ordered by a
+  composite percentile of P/E, P/B, yield, ROE and debt.
 - A low P/E or P/B alone doesn't mean a stock is a good buy — see the
   in-app disclaimer.

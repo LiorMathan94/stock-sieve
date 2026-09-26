@@ -2,12 +2,17 @@ name: Daily data refresh
 
 on:
   schedule:
-    - cron: "0 6 * * *"  # 06:00 UTC daily
+    - cron: "0 6 * * 2-6"  # 06:00 UTC Tue-Sat, i.e. after each US trading day closes
   workflow_dispatch: {}
+
+concurrency:
+  group: daily-fetch
+  cancel-in-progress: false
 
 jobs:
   fetch:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     permissions:
       contents: write
     steps:
@@ -16,10 +21,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
 
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      # Exits non-zero (failing the run, which emails the repo owner) if most
+      # tickers can't be fetched; the previous data file is left untouched.
       - name: Fetch fundamentals
         env:
           FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
@@ -30,5 +38,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add data/stocks.json
-          git diff --cached --quiet || git commit -m "Daily data refresh"
+          git diff --cached --quiet && exit 0
+          git commit -m "Daily data refresh"
+          git pull --rebase
           git push

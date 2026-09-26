@@ -6,3 +6,5 @@ venv/
 .DS_Store
 .idea/
 .claude/
+.pytest_cache/
+data/stocks.sample.json

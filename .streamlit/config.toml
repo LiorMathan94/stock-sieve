@@ -6,5 +6,9 @@ secondaryBackgroundColor = "#f4f6f5"
 textColor = "#1c1c1c"
 font = "sans serif"
 
-[server]
-runOnSave = true
+[client]
+# Hide the developer menu / Deploy button from end users.
+toolbarMode = "minimal"
+
+[browser]
+gatherUsageStats = false
